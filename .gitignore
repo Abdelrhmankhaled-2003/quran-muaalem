@@ -17,6 +17,7 @@
 *.swp
 
 **/*.gradio/
+models/tajweed-rules-v*/
 
 # vitepress
 docs/.vitepress/cache/

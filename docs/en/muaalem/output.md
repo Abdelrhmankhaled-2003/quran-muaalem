@@ -11,6 +11,13 @@ The inference output is a list of `MuaalemOutput` objects (`src/quran_muaalem/mu
 MuaalemOutput
   phonemes: Unit
   sifat: list[Sifa]
+  tajweed_rules: list[TajweedRuleEvent]
+
+TajweedRuleEvent
+  level: str
+  rule: str
+  prob: float
+  frame_index: int
 
 Unit
   text: str
@@ -29,6 +36,8 @@ Sifa
   tafashie: SingleUnit | None
   istitala: SingleUnit | None
   ghonna: SingleUnit | None
+  ismat: SingleUnit | None
+  idhlaq: SingleUnit | None
 
 SingleUnit
   text: str
@@ -57,7 +66,9 @@ SingleUnit
       "tikraar": {"text": "not_mokarar", "prob": 0.99, "idx": 0},
       "tafashie": {"text": "not_motafashie", "prob": 0.99, "idx": 0},
       "istitala": {"text": "not_mostateel", "prob": 0.99, "idx": 0},
-      "ghonna": {"text": "not_maghnoon", "prob": 0.99, "idx": 0}
+      "ghonna": {"text": "not_maghnoon", "prob": 0.99, "idx": 0},
+      "ismat": {"text": "not_ismat", "prob": 1.0, "idx": 0},
+      "idhlaq": {"text": "idhlaq", "prob": 1.0, "idx": 1}
     }
   ]
 }
@@ -65,7 +76,12 @@ SingleUnit
 
 > Notes:
 > - `probs` are derived from the CTC softmax; they are not calibrated.
+> - `ismat` and `idhlaq` are derived from the recognized phoneme, not predicted by separate model heads. Their probability is `1.0` conditional on that phoneme prediction.
+> - Idhlaq applies to `ب ر ف م ن ل`; other recognized letters are labeled Ismat.
 > - Some `Sifa` fields may be `None` if alignment length mismatches occur.
+> - `tajweed_rules` is empty for checkpoints without Tajweed rule heads. `frame_index` is a model-output frame, not a time in seconds, and its probability is not calibrated.
+
+Rule-enabled checkpoints return events from the `noon_tanween` and `meem_sakinah` levels, such as `ikhfa`, `idgham_bighunnah`, and `ikhfa_shafawi`. These outputs recognize rule occurrence; they do not assess learner errors.
 
 ## Comparing predictions to reference
 
@@ -74,7 +90,8 @@ Two helper modules format the outputs for humans:
 - `src/quran_muaalem/explain.py` renders a terminal table using `rich`.
   - `explain_for_terminal(...)` builds a diff between predicted phonemes and the reference, then prints a table.
 - `src/quran_muaalem/explain_gradio.py` renders HTML for the Gradio UI.
-  - `explain_for_gradio(...)` shows a colorized phoneme diff and a table of attributes.
+  - `explain_for_gradio(...)` shows a colorized phoneme diff and an attribute table.
+  - The table includes Noon Sakinah/Tanween and Meem Sakinah columns; detected rules and their confidence are shown alongside the aligned phoneme group.
 
 Both use `diff-match-patch` to segment insertions, deletions, and partial matches between the predicted phonemes and the reference phoneme string.
 
@@ -90,3 +107,5 @@ Both use `diff-match-patch` to segment insertions, deletions, and partial matche
 - `tafashie`
 - `istitala`
 - `ghonna`
+- `ismat`
+- `idhlaq`

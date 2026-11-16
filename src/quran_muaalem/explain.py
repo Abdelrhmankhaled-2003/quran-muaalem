@@ -11,7 +11,10 @@ from rich.table import Table
 from rich.console import Console
 
 from .muaalem_typing import Sifa
-from .modeling.vocab import SIFAT_ATTR_TO_ARABIC_WITHOUT_BRACKETS
+from .modeling.vocab import (
+    SIFAT_ATTR_TO_ARABIC_WITHOUT_BRACKETS,
+    derive_ismat_idhlaq_labels,
+)
 
 
 @dataclass
@@ -134,6 +137,7 @@ def expalin_sifat(
     sifat: list[Sifa],
     exp_sifat: list[SifaOutput],
     diffs,
+    additional_columns: dict[str, list[str]] | None = None,
 ):
     table = []
     chunks = [s.phonemes_group for s in sifat]
@@ -156,7 +160,15 @@ def expalin_sifat(
                 else:
                     raw[f"{key}"] = "None"
 
-                raw[f"exp_{key}"] = getattr(exp_sifat[group.ref_idx], key)
+                if key in {"ismat", "idhlaq"}:
+                    ref_labels = derive_ismat_idhlaq_labels(
+                        exp_sifat[group.ref_idx].phonemes
+                    )
+                    raw[f"exp_{key}"] = (
+                        ref_labels[key] if ref_labels is not None else "None"
+                    )
+                else:
+                    raw[f"exp_{key}"] = getattr(exp_sifat[group.ref_idx], key)
         elif tag in {"partial", "insert"}:
             raw["tag"] = "insert"
             raw["phonemes"] = sifat[group.out_idx].phonemes_group
@@ -169,6 +181,14 @@ def expalin_sifat(
 
                 raw[f"exp_{key}"] = ""
         if raw:
+            for key, values in (additional_columns or {}).items():
+                if len(values) != len(sifat):
+                    raise ValueError(
+                        f"Additional column `{key}` must have one value per phoneme group"
+                    )
+                value = values[group.out_idx]
+                raw[key] = value
+                raw[f"exp_{key}"] = value
             table.append(raw)
 
     # print(json.dumps(table, indent=2, ensure_ascii=False))

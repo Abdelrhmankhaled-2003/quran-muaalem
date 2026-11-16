@@ -48,3 +48,18 @@ These are then tokenized per level by `MultiLevelTokenizer` during training.
 ## Next step
 
 See **Evaluation and Metrics** for recommended benchmarks and reporting.
+
+## Training noon/tanween and meem-sakinah heads
+
+`scripts/train_tajweed_rules.py` derives rule-event targets from Uthmani text and trains two new CTC heads while freezing the base encoder. The dataset has no explicit labels for these categories, so these are text-derived targets for rule occurrence—not learner-error labels.
+
+```powershell
+python -m pip install pyarrow soundfile scipy
+python scripts/train_tajweed_rules.py `
+  --dataset-root <dataset-folder> `
+  --output-dir <new-model-folder>
+```
+
+The dataset folder must contain `moshaf_0.0` and `moshaf_1.0`. The first is used for training and the second for evaluation on a different reciter. Training requires CUDA, adapts batch sizes to clip duration, and updates only the new heads; it does not fine-tune the full encoder.
+
+After training, the Gradio app uses `models/tajweed-rules-v1` when that checkpoint is present and displays the detected rule events. Restart the app after the checkpoint has been saved.

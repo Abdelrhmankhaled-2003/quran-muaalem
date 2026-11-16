@@ -1,7 +1,9 @@
 from dataclasses import asdict
 import json
+from types import SimpleNamespace
 
 from quran_transcript import Aya, quran_phonetizer, MoshafAttributes
+from quran_transcript import alphabet as alph
 import torch
 import pytest
 from librosa.core import load
@@ -12,11 +14,13 @@ from quran_muaalem.decode import (
     multilevel_greedy_decode,
     align_sequence,
     align_predicted_sequence,
+    phoneme_group_frame_indices,
 )
 from quran_muaalem.muaalem_typing import Unit, Sifa, SingleUnit
 from quran_muaalem.modeling.multi_level_tokenizer import MultiLevelTokenizer
 from quran_muaalem.inference import format_sifat, Muaalem
-from quran_muaalem.explain import explain_for_terminal
+from quran_muaalem.modeling.vocab import derive_ismat_idhlaq_labels
+from quran_muaalem.explain import explain_for_terminal, expalin_sifat
 
 
 @pytest.mark.parametrize(
@@ -229,6 +233,32 @@ def test_ctc_decode(batch_ids, batch_probs, ex_batch_ids, ex_batch_probs):
         print(f"EXP Probs: {torch.FloatTensor(ex_batch_probs[idx])}")
         torch.testing.assert_close(outs[idx].ids, torch.LongTensor(ex_batch_ids[idx]))
         torch.testing.assert_close(outs[idx].p, torch.FloatTensor(ex_batch_probs[idx]))
+
+
+def test_ctc_decode_tracks_frames_for_trailing_nonblank_tokens():
+    out = ctc_decode(
+        torch.LongTensor([[0, 1, 1, 0, 2, 2, 2]]),
+        torch.FloatTensor([[0.1, 0.8, 0.6, 0.1, 0.7, 0.8, 0.9]]),
+        collapse_consecutive=True,
+    )[0]
+
+    assert out.ids.tolist() == [1, 2]
+    assert out.frame_indices.tolist() == [1, 5]
+
+
+def test_phoneme_group_frames_follow_decoded_token_chunks():
+    unit = Unit(
+        text="ab",
+        probs=[0.9, 0.8],
+        ids=[1, 2],
+        frame_indices=[2, 8],
+    )
+
+    assert phoneme_group_frame_indices(unit, ["a", "b"], {1: "a", 2: "b"}) == [
+        2,
+        8,
+    ]
+    assert phoneme_group_frame_indices(unit, ["ab"], {1: "a", 2: "b"}) == [5]
 
 
 # @pytest.mark.parametrize(
@@ -747,6 +777,88 @@ def test_fromat_sifat(level_to_units, chunked_phonemes_batch, ex_sifat_batch):
             print(f"EX OUPUT: {json.dumps(asdict(ex_sifa), indent=2)}")
             print("-" * 50)
             assert sifa == ex_sifa
+
+
+def test_derive_ismat_idhlaq_labels():
+    ph = alph.phonetics
+
+    idhlaq_labels = derive_ismat_idhlaq_labels(ph.baa + ph.fatha)
+    assert idhlaq_labels == {"ismat": "not_ismat", "idhlaq": "idhlaq"}
+
+    ismat_labels = derive_ismat_idhlaq_labels(ph.taa + ph.fatha)
+    assert ismat_labels == {"ismat": "ismat", "idhlaq": "not_idhlaq"}
+    for phoneme in (
+        ph.baa,
+        ph.faa,
+        ph.raa,
+        ph.meem,
+        ph.noon,
+        ph.lam,
+        ph.noon_mokhfah,
+        ph.meem_mokhfah,
+    ):
+        assert derive_ismat_idhlaq_labels(phoneme) == {
+            "ismat": "not_ismat",
+            "idhlaq": "idhlaq",
+        }
+    assert derive_ismat_idhlaq_labels(ph.fatha) is None
+
+
+def test_format_sifat_includes_derived_ismat_idhlaq():
+    ph = alph.phonetics
+    model_sifat_levels = {
+        level: [Unit(text="", probs=[], ids=[])]
+        for level in Sifa.__dataclass_fields__
+        if level not in {"phonemes_group", "ismat", "idhlaq"}
+    }
+    sifat_batch = format_sifat(
+        level_to_units=model_sifat_levels,
+        chunked_phonemes_batch=[[ph.baa + ph.fatha, ph.taa + ph.fatha]],
+        multi_level_tokenizer=None,
+    )
+
+    assert sifat_batch[0][0].ismat.text == "not_ismat"
+    assert sifat_batch[0][0].idhlaq.text == "idhlaq"
+    assert sifat_batch[0][0].idhlaq.prob == 1.0
+    assert sifat_batch[0][1].ismat.text == "ismat"
+    assert sifat_batch[0][1].idhlaq.text == "not_idhlaq"
+
+
+def test_explain_assesses_derived_ismat_idhlaq():
+    ph = alph.phonetics
+    predicted = Sifa(
+        phonemes_group=ph.baa,
+        hams_or_jahr=None,
+        shidda_or_rakhawa=None,
+        tafkheem_or_taqeeq=None,
+        itbaq=None,
+        safeer=None,
+        qalqla=None,
+        tikraar=None,
+        tafashie=None,
+        istitala=None,
+        ghonna=None,
+        ismat=SingleUnit(text="not_ismat", prob=1.0, idx=0),
+        idhlaq=SingleUnit(text="idhlaq", prob=1.0, idx=1),
+    )
+    reference = SimpleNamespace(
+        phonemes=ph.baa,
+        hams_or_jahr=None,
+        shidda_or_rakhawa=None,
+        tafkheem_or_taqeeq=None,
+        itbaq=None,
+        safeer=None,
+        qalqla=None,
+        tikraar=None,
+        tafashie=None,
+        istitala=None,
+        ghonna=None,
+    )
+
+    assessment = expalin_sifat([predicted], [reference], [(0, ph.baa)])
+
+    assert assessment[0]["ismat"] == assessment[0]["exp_ismat"] == "not_ismat"
+    assert assessment[0]["idhlaq"] == assessment[0]["exp_idhlaq"] == "idhlaq"
 
 
 @pytest.mark.slow

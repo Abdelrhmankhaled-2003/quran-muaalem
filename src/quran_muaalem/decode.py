@@ -308,6 +308,7 @@ class CTCDecodeOut:
 
     ids: torch.LongTensor
     p: torch.FloatTensor
+    frame_indices: torch.LongTensor
 
 
 # BUG: trailing zero id at the end
@@ -334,53 +335,40 @@ def ctc_decode(
         if collapse_consecutive:
             tokens = []
             probs = []
-            start = 0
-            end = 0
-            if len(seq) == 1 and seq[0] != blank_id:
-                tokens.append(seq[0])
-                probs.append(batch_probs[seq_idx][0])
-
-            for idx in range(len(seq) - 1):
+            frame_indices = []
+            idx = 0
+            while idx < len(seq):
                 curr = seq[idx]
-                next = seq[idx + 1]
-                # Last Item
-                if idx == len(seq) - 2 and curr != blank_id:
-                    if curr == next:
-                        end = idx + 2
-                        tokens.append(curr)
-                        probs.append(
-                            batch_probs[seq_idx][start:end].sum() / (end - start)
-                        )
-                    elif curr != next:
-                        end = idx + 1
-                        tokens.append(curr)
-                        probs.append(
-                            batch_probs[seq_idx][start:end].sum() / (end - start)
-                        )
-                        # the last item is only a token if it is not a blank
-                        if next != blank_id:
-                            tokens.append(next)
-                            probs.append(batch_probs[seq_idx][idx + 1])
-                # Normal Case
-                elif curr != next and curr != blank_id:
-                    end = idx + 1
-                    tokens.append(curr)
-                    probs.append(batch_probs[seq_idx][start:end].sum() / (end - start))
-                    start = end
-                elif curr == blank_id:
-                    start = idx + 1
+                if curr == blank_id:
+                    idx += 1
+                    continue
+
+                start = idx
+                while idx + 1 < len(seq) and seq[idx + 1] == curr:
+                    idx += 1
+                end = idx + 1
+                tokens.append(curr)
+                probs.append(
+                    batch_probs[seq_idx][start:end].sum() / (end - start)
+                )
+                frame_indices.append((start + end - 1) // 2)
+                idx = end
 
             outs.append(
                 CTCDecodeOut(
                     ids=torch.LongTensor(tokens),
                     p=torch.FloatTensor(probs),
+                    frame_indices=torch.LongTensor(frame_indices),
                 )
             )
         else:
             mask = seq != blank_id
             tokens = seq[mask]
             probs = batch_probs[seq_idx][mask]
-            outs.append(CTCDecodeOut(ids=tokens, p=probs))
+            frame_indices = torch.arange(len(seq))[mask]
+            outs.append(
+                CTCDecodeOut(ids=tokens, p=probs, frame_indices=frame_indices)
+            )
     return outs
 
 
@@ -460,9 +448,45 @@ def phonemes_level_greedy_decode(
                 text=text,
                 probs=decode_out.p,
                 ids=decode_out.ids,
+                frame_indices=decode_out.frame_indices.tolist(),
             ),
         )
     return units
+
+
+def phoneme_group_frame_indices(
+    phonemes_unit: Unit,
+    chunked_phonemes: list[str],
+    phonemes_vocab: dict[int, str],
+) -> list[int]:
+    """Return one representative CTC frame for each phoneme group."""
+    if phonemes_unit.frame_indices is None:
+        raise ValueError("Phoneme frame indices are required for rule alignment")
+
+    token_text = [phonemes_vocab[int(token_id)] for token_id in phonemes_unit.ids]
+    if len(token_text) != len(phonemes_unit.frame_indices):
+        raise ValueError("Phoneme token and frame-index counts do not match")
+    if "".join(chunked_phonemes) != "".join(token_text):
+        raise ValueError("Phoneme chunks do not match the decoded token sequence")
+
+    group_frames = []
+    token_index = 0
+    for group in chunked_phonemes:
+        start = token_index
+        group_text = ""
+        while token_index < len(token_text) and len(group_text) < len(group):
+            group_text += token_text[token_index]
+            token_index += 1
+        if group_text != group:
+            raise ValueError("Unable to align a phoneme group to decoded tokens")
+        frames = phonemes_unit.frame_indices[start:token_index]
+        if not frames:
+            raise ValueError("A phoneme group has no decoded frame")
+        group_frames.append((frames[0] + frames[-1]) // 2)
+
+    if token_index != len(token_text):
+        raise ValueError("Some decoded phoneme tokens are not in a phoneme group")
+    return group_frames
 
 
 def multilevel_greedy_decode(

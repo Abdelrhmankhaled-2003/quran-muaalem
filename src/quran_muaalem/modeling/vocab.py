@@ -28,11 +28,80 @@ SIFAT_ATTR_TO_ARABIC_WITHOUT_BRACKETS = {
     "not_mostateel": "لا إستطالة",
     "maghnoon": "مغن",
     "not_maghnoon": "لا غنة",
+    "ismat": "إصمات",
+    "not_ismat": "لا إصمات",
+    "idhlaq": "إذلاق",
+    "not_idhlaq": "لا إذلاق",
 }
 SIFAT_ATTR_TO_ARABIC = {
     k: f"[{v}]" for k, v in SIFAT_ATTR_TO_ARABIC_WITHOUT_BRACKETS.items()
 }
 SIFAT_ATTR_TO_ENGLISH = {v: k for k, v in SIFAT_ATTR_TO_ARABIC.items()}
+
+_PHONETIC_LETTERS = {
+    alph.phonetics.hamza,
+    alph.phonetics.baa,
+    alph.phonetics.taa,
+    alph.phonetics.thaa,
+    alph.phonetics.jeem,
+    alph.phonetics.haa_mohmala,
+    alph.phonetics.khaa,
+    alph.phonetics.daal,
+    alph.phonetics.thaal,
+    alph.phonetics.raa,
+    alph.phonetics.zay,
+    alph.phonetics.seen,
+    alph.phonetics.sheen,
+    alph.phonetics.saad,
+    alph.phonetics.daad,
+    alph.phonetics.taa_mofakhama,
+    alph.phonetics.zaa_mofakhama,
+    alph.phonetics.ayn,
+    alph.phonetics.ghyn,
+    alph.phonetics.faa,
+    alph.phonetics.qaf,
+    alph.phonetics.kaf,
+    alph.phonetics.lam,
+    alph.phonetics.meem,
+    alph.phonetics.noon,
+    alph.phonetics.haa,
+    alph.phonetics.waw,
+    alph.phonetics.yaa,
+    alph.phonetics.alif,
+    alph.phonetics.yaa_madd,
+    alph.phonetics.waw_madd,
+    alph.phonetics.alif_momala,
+    alph.phonetics.hamza_mosahala,
+    alph.phonetics.noon_mokhfah,
+    alph.phonetics.meem_mokhfah,
+}
+_IDHLAQ_PHONETIC_LETTERS = {
+    alph.phonetics.baa,
+    alph.phonetics.faa,
+    alph.phonetics.raa,
+    alph.phonetics.meem,
+    alph.phonetics.noon,
+    alph.phonetics.lam,
+    alph.phonetics.noon_mokhfah,
+    alph.phonetics.meem_mokhfah,
+}
+
+
+def derive_ismat_idhlaq_labels(phonemes_group: str) -> dict[str, str] | None:
+    """Derive both binary labels from the first phoneme in a letter group."""
+    if not phonemes_group:
+        return None
+
+    phoneme = phonemes_group[0]
+    if phoneme not in _PHONETIC_LETTERS:
+        return None
+
+    is_idhlaq = phoneme in _IDHLAQ_PHONETIC_LETTERS
+    return {
+        "ismat": "not_ismat" if is_idhlaq else "ismat",
+        "idhlaq": "idhlaq" if is_idhlaq else "not_idhlaq",
+    }
+
 
 PAD_TOKEN = "[PAD]"
 PAD_TOKEN_IDX = 0

@@ -10,8 +10,20 @@ from .modeling.modeling_multi_level_ctc import Wav2Vec2BertForMultilevelCTC
 from .decode import (
     multilevel_greedy_decode,
     phonemes_level_greedy_decode,
+    phoneme_group_frame_indices,
 )
-from .muaalem_typing import Unit, SingleUnit, Sifa, MuaalemOutput
+from .muaalem_typing import (
+    Unit,
+    SingleUnit,
+    Sifa,
+    MuaalemOutput,
+    TajweedRuleEvent,
+)
+from .modeling.vocab import derive_ismat_idhlaq_labels
+from .modeling.tajweed_rules import (
+    RULE_LEVEL_LABELS,
+    decode_tajweed_rule_events,
+)
 
 
 def format_sifat(
@@ -24,6 +36,7 @@ def format_sifat(
         sifat = []
         for idx, ph_group in enumerate(chunked_phonemes_batch[seq_idx]):
             sifa_dict = {}
+            derived_labels = derive_ismat_idhlaq_labels(ph_group)
             for level in level_to_units:
                 if level == "phonemes":
                     continue
@@ -40,6 +53,13 @@ def format_sifat(
                         f"Sequence: `{seq_idx}` has short Level: {level} we will place it with `None`"
                     )
                     sifa_dict[level] = None
+            for level in ("ismat", "idhlaq"):
+                label = derived_labels[level] if derived_labels else None
+                sifa_dict[level] = (
+                    SingleUnit(text=label, prob=1.0, idx=int(label == level))
+                    if label is not None
+                    else None
+                )
             sifat.append(
                 Sifa(
                     phonemes_group=chunked_phonemes_batch[seq_idx][idx],
@@ -117,6 +137,8 @@ class Muaalem:
                         - tafashie (SingleUnit): either `motafashie`, or `not_motafashie`
                         - istitala (SingleUnit): either `mostateel`, or `not_mostateel`
                         - ghonna (SingleUnit): either `maghnoon`, or `not_maghnoon`
+                        - ismat (SingleUnit): either `ismat`, or `not_ismat`
+                        - idhlaq (SingleUnit): either `idhlaq`, or `not_idhlaq`
 
             Each SingleUnit in Sifa properties contains:
                 text (str): The feature's categorical label (e.g., "hams", "shidda").
@@ -150,6 +172,26 @@ class Muaalem:
                 torch.nn.functional.softmax(outs[level], dim=-1).cpu().to(torch.float32)
             )
 
+        rule_events_by_level = {}
+        rule_levels = [level for level in RULE_LEVEL_LABELS if level in probs]
+        if rule_levels:
+            attention_mask = features.get("attention_mask")
+            if attention_mask is None:
+                output_lengths = [probs["phonemes"].shape[1]] * len(waves)
+            else:
+                output_lengths = (
+                    self.model._get_feat_extract_output_lengths(
+                        attention_mask.to(torch.long).sum(dim=-1)
+                    )
+                    .to(torch.long)
+                    .cpu()
+                    .tolist()
+                )
+            for level in rule_levels:
+                rule_events_by_level[level] = decode_tajweed_rule_events(
+                    probs[level], output_lengths, level
+                )
+
         # Decoding only Phonemes Level
         phonemes_units = phonemes_level_greedy_decode(
             probs["phonemes"], self.multi_level_tokenizer.id_to_vocab["phonemes"]
@@ -158,9 +200,22 @@ class Muaalem:
         chunked_phonemes_batch: list[list[str]] = []
         for phonemes_unit in phonemes_units:
             chunked_phonemes_batch.append(chunck_phonemes(phonemes_unit.text))
+        phoneme_group_frames = [
+            phoneme_group_frame_indices(
+                phonemes_unit,
+                chunked_phonemes_batch[index],
+                self.multi_level_tokenizer.id_to_vocab["phonemes"],
+            )
+            for index, phonemes_unit in enumerate(phonemes_units)
+        ]
 
+        sifa_level_probs = {
+            level: level_probs
+            for level, level_probs in probs.items()
+            if level in self.multi_level_tokenizer.id_to_vocab
+        }
         level_to_units = multilevel_greedy_decode(
-            level_to_probs=probs,
+            level_to_probs=sifa_level_probs,
             level_to_id_to_vocab=self.multi_level_tokenizer.id_to_vocab,
             level_to_ref_ids=level_to_ref_ids,
             chunked_phonemes_batch=chunked_phonemes_batch,
@@ -179,10 +234,36 @@ class Muaalem:
         outs = []
         # looping over the batch
         for idx in range(len(level_to_units["phonemes"])):
+            tajweed_rules = []
+            for level in RULE_LEVEL_LABELS:
+                level_events = rule_events_by_level.get(level)
+                if level_events is None:
+                    continue
+                for rule, prob, frame_index in level_events[idx]:
+                    group_index = (
+                        min(
+                            range(len(phoneme_group_frames[idx])),
+                            key=lambda group: abs(
+                                phoneme_group_frames[idx][group] - frame_index
+                            ),
+                        )
+                        if phoneme_group_frames[idx]
+                        else None
+                    )
+                    tajweed_rules.append(
+                        TajweedRuleEvent(
+                            level=level,
+                            rule=rule,
+                            prob=prob,
+                            frame_index=frame_index,
+                            phoneme_group_index=group_index,
+                        )
+                    )
             outs.append(
                 MuaalemOutput(
                     phonemes=level_to_units["phonemes"][idx],
                     sifat=sifat_batch[idx],
+                    tajweed_rules=tajweed_rules,
                 )
             )
         return outs

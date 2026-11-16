@@ -11,6 +11,13 @@
 MuaalemOutput
   phonemes: Unit
   sifat: list[Sifa]
+  tajweed_rules: list[TajweedRuleEvent]
+
+TajweedRuleEvent
+  level: str
+  rule: str
+  prob: float
+  frame_index: int
 
 Unit
   text: str
@@ -29,6 +36,8 @@ Sifa
   tafashie: SingleUnit | None
   istitala: SingleUnit | None
   ghonna: SingleUnit | None
+  ismat: SingleUnit | None
+  idhlaq: SingleUnit | None
 
 SingleUnit
   text: str
@@ -57,7 +66,9 @@ SingleUnit
       "tikraar": {"text": "not_mokarar", "prob": 0.99, "idx": 0},
       "tafashie": {"text": "not_motafashie", "prob": 0.99, "idx": 0},
       "istitala": {"text": "not_mostateel", "prob": 0.99, "idx": 0},
-      "ghonna": {"text": "not_maghnoon", "prob": 0.99, "idx": 0}
+      "ghonna": {"text": "not_maghnoon", "prob": 0.99, "idx": 0},
+      "ismat": {"text": "not_ismat", "prob": 1.0, "idx": 0},
+      "idhlaq": {"text": "idhlaq", "prob": 1.0, "idx": 1}
     }
   ]
 }
@@ -65,7 +76,12 @@ SingleUnit
 
 > ملاحظات:
 > - `probs` ناتجة عن softmax خاص بـ CTC وليست مُعايرة بالضرورة.
+> - `ismat` و`idhlaq` مشتقان من الفونيم المتعرّف عليه، ولا يتنبأ بهما رأسا نموذج منفصلان. احتمالهما `1.0` مشروط بصحة الفونيم المتعرّف عليه.
+> - حروف الإذلاق هي `ب ر ف م ن ل`، وتُصنّف بقية الحروف المتعرّف عليها ضمن الإصمات.
 > - قد تكون بعض حقول `Sifa` بقيمة `None` إذا حدث عدم تطابق في المحاذاة.
+> - `tajweed_rules` تكون فارغة للنماذج التي لا تحتوي على رؤوس قواعد التجويد. `frame_index` يشير إلى إطار خرج النموذج وليس إلى زمن بالثواني، والاحتمال غير مُعاير.
+
+تتضمن النماذج المدرّبة لرؤوس القواعد أحداثًا من المستويين `noon_tanween` و`meem_sakinah`، مثل `ikhfa` و`idgham_bighunnah` و`ikhfa_shafawi`. هذه التوقعات تتعرف على وقوع القاعدة، ولا تقيّم أخطاء المتعلّم.
 
 ## مقارنة التوقع مع المرجع
 
@@ -74,7 +90,8 @@ SingleUnit
 - `src/quran_muaalem/explain.py` يعرض جدولًا في الطرفية باستخدام `rich`.
   - `explain_for_terminal(...)` يبني فرقًا بين الفونيمات المتوقعة والمرجع ثم يطبع جدولًا.
 - `src/quran_muaalem/explain_gradio.py` يولّد HTML لواجهة Gradio.
-  - `explain_for_gradio(...)` يعرض فرقًا ملونًا للفونيمات وجدول خصائص.
+  - `explain_for_gradio(...)` يعرض فرقًا ملونًا للفونيمات وجدولًا للخصائص.
+  - يتضمن الجدول عمودَي أحكام النون الساكنة والتنوين والميم الساكنة؛ وتظهر القاعدة المكتشفة وثقتها بجانب مجموعة الفونيمات المرتبطة بها.
 
 كلاهما يستخدم `diff-match-patch` لتقسيم الإدراجات والحذف والاختلافات الجزئية بين الفونيمات.
 
@@ -90,3 +107,5 @@ SingleUnit
 - `tafashie`
 - `istitala`
 - `ghonna`
+- `ismat`
+- `idhlaq`

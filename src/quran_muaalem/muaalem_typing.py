@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import torch
 
 
@@ -11,6 +11,7 @@ class Unit:
     text: str
     probs: torch.FloatTensor | list[float]
     ids: torch.LongTensor | list[int]
+    frame_indices: list[int] | None = None
 
 
 @dataclass
@@ -45,6 +46,8 @@ class Sifa:
         - tafashie (SingleUnit): either `motafashie`, or `not_motafashie`
         - istitala (SingleUnit): either `mostateel`, or `not_mostateel`
         - ghonna (SingleUnit): either `maghnoon`, or `not_maghnoon`
+        - ismat (SingleUnit): either `ismat`, or `not_ismat`
+        - idhlaq (SingleUnit): either `idhlaq`, or `not_idhlaq`
 
     Each SingleUnit in Sifa properties contains:
         text (str): The feature's categorical label (e.g., "hams", "shidda").
@@ -64,6 +67,17 @@ class Sifa:
     tafashie: SingleUnit | None
     istitala: SingleUnit | None
     ghonna: SingleUnit | None
+    ismat: SingleUnit | None = None
+    idhlaq: SingleUnit | None = None
+
+
+@dataclass
+class TajweedRuleEvent:
+    level: str
+    rule: str
+    prob: float
+    frame_index: int
+    phoneme_group_index: int | None = None
 
 
 @dataclass
@@ -76,3 +90,4 @@ class MuaalemOutput:
 
     phonemes: Unit
     sifat: list[Sifa]
+    tajweed_rules: list[TajweedRuleEvent] = field(default_factory=list)

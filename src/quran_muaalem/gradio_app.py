@@ -1,8 +1,10 @@
 import logging
 from dataclasses import asdict
 import json
+from pathlib import Path
 from typing import Literal, Optional, Any, get_origin, get_args
 
+import numpy as np
 from quran_transcript import Aya, quran_phonetizer, MoshafAttributes
 from quran_transcript.utils import PartOfUthmaniWord
 from quran_transcript.phonetics.moshaf_attributes import (
@@ -18,6 +20,10 @@ from quran_muaalem.inference import Muaalem
 from quran_muaalem.muaalem_typing import MuaalemOutput
 from quran_muaalem.explain import explain_for_terminal
 from quran_muaalem.explain_gradio import explain_for_gradio
+from quran_muaalem.audio_processing import (
+    reduce_background_noise,
+    trim_trailing_noise,
+)
 
 # Initialize components
 REQUIRED_MOSHAF_FIELDS = [
@@ -59,7 +65,14 @@ REQUIRED_MOSHAF_FIELDS = [
     "raa_yasr",
     "meem_mokhfah",
 ]
-model_id = "obadx/muaalem-model-v3_2"
+tajweed_model_path = (
+    Path(__file__).resolve().parents[2] / "models" / "tajweed-rules-v1"
+)
+model_id = (
+    str(tajweed_model_path)
+    if (tajweed_model_path / "config.json").is_file()
+    else "obadx/muaalem-model-v3_2"
+)
 logging.basicConfig(level=logging.INFO)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 muaalem = Muaalem(model_name_or_path=model_id, device=device)
@@ -158,6 +171,18 @@ def update_aya_dropdown(sura_idx):
     )
 
 
+def update_num_words_for_ayah(sura_idx, aya_idx, start_idx, num_words):
+    if any(value is None for value in (sura_idx, aya_idx, start_idx, num_words)):
+        return gr.update()
+
+    ayah_word_count = len(Aya(int(sura_idx), int(aya_idx)).get().uthmani.split())
+    remaining_words = ayah_word_count - int(start_idx)
+    if remaining_words < 1:
+        return gr.update()
+
+    return gr.update(value=min(int(num_words), remaining_words))
+
+
 def update_uthmani_ref(sura_idx, aya_idx, start_idx, num_words):
     if not all([sura_idx, aya_idx, start_idx is not None, num_words is not None]):
         return ""
@@ -174,11 +199,13 @@ def update_uthmani_ref(sura_idx, aya_idx, start_idx, num_words):
         return f"Error: {str(e)}"
 
 
-def process_audio(audio, sura_idx, aya_idx, start_idx, num_words):
+def process_audio(
+    audio, sura_idx, aya_idx, start_idx, num_words, noise_cancellation=True
+):
     global current_moshaf
 
     if audio is None:
-        return "Please upload an audio file first"
+        return None, "Please upload an audio file first"
 
     try:
         # Get Uthmani reference text
@@ -193,6 +220,10 @@ def process_audio(audio, sura_idx, aya_idx, start_idx, num_words):
 
         # Process audio
         wave, _ = load(audio, sr=sampling_rate, mono=True)
+        if noise_cancellation:
+            trimmed_length = trim_trailing_noise(wave, sampling_rate).size
+            wave = reduce_background_noise(wave, sampling_rate)
+            wave = wave[:trimmed_length]
         outs = muaalem(
             [wave],
             [phonetizer_out],
@@ -213,12 +244,19 @@ def process_audio(audio, sura_idx, aya_idx, start_idx, num_words):
             outs[0].sifat,
             phonetizer_out.sifat,
             lang="arabic",
+            tajweed_rules=outs[0].tajweed_rules,
         )
 
-        return explanation_html
+        playback_wave = np.clip(
+            np.rint(wave * 32768.0), -32768, 32767
+        ).astype(np.int16)
+        return (sampling_rate, playback_wave), explanation_html
 
     except PartOfUthmaniWord as e:
-        return f"⚠️ Error: The selected word range includes partial Uthmani words. Please adjust the number of words to include complete words only.\n\nError details: {str(e)}"
+        return (
+            None,
+            f"⚠️ Error: The selected word range includes partial Uthmani words. Please adjust the number of words to include complete words only.\n\nError details: {str(e)}",
+        )
     # except Exception as e:
     #     return f"Error processing audio: {str(e)}"
 
@@ -313,6 +351,7 @@ with gr.Blocks(title="المعلم القرآني") as app:
                     label="عدد الكلمات",
                     minimum=1,
                     step=1,
+                    info="Reduced to the words remaining in this ayah when you change the ayah or starting word. Increase it manually to include following ayat.",
                     elem_id="num_words",
                 )
                 uthmani_text = gr.Textbox(
@@ -329,8 +368,17 @@ with gr.Blocks(title="المعلم القرآني") as app:
                     type="filepath",
                     elem_id="audio_input",
                 )
+                noise_cancellation = gr.Checkbox(
+                    label="Noise cancellation",
+                    value=True,
+                    info="Estimate steady background noise from quieter parts and trim a long background-only tail. Leave a short quiet lead-in when possible; turn off if letters sound distorted.",
+                )
                 analyze_btn = gr.Button(
                     "افحص التلاوة", variant="primary", elem_id="analyze_btn"
+                )
+                cleaned_audio = gr.Audio(
+                    label="Audio analyzed by the model (noise-reduced when enabled)",
+                    interactive=False,
                 )
                 output_html = gr.HTML(
                     label="نتيجة الفحص",
@@ -348,24 +396,45 @@ with gr.Blocks(title="المعلم القرآني") as app:
         sura_dropdown.change(
             update_aya_dropdown, inputs=sura_dropdown, outputs=aya_dropdown
         ).then(
+            update_num_words_for_ayah,
+            inputs=[sura_dropdown, aya_dropdown, start_idx, num_words],
+            outputs=num_words,
+        ).then(
             update_uthmani_ref,
             inputs=[sura_dropdown, aya_dropdown, start_idx, num_words],
             outputs=uthmani_text,
         )
 
-        # Update uthmani text when any parameter changes
-        for component in [aya_dropdown, start_idx, num_words]:
+        # Keep the default word selection within the selected ayah.
+        for component in [aya_dropdown, start_idx]:
             component.change(
+                update_num_words_for_ayah,
+                inputs=[sura_dropdown, aya_dropdown, start_idx, num_words],
+                outputs=num_words,
+            ).then(
                 update_uthmani_ref,
                 inputs=[sura_dropdown, aya_dropdown, start_idx, num_words],
                 outputs=uthmani_text,
             )
 
+        num_words.change(
+            update_uthmani_ref,
+            inputs=[sura_dropdown, aya_dropdown, start_idx, num_words],
+            outputs=uthmani_text,
+        )
+
         # Process audio when button is clicked
         analyze_btn.click(
             process_audio,
-            inputs=[audio_input, sura_dropdown, aya_dropdown, start_idx, num_words],
-            outputs=output_html,
+            inputs=[
+                audio_input,
+                sura_dropdown,
+                aya_dropdown,
+                start_idx,
+                num_words,
+                noise_cancellation,
+            ],
+            outputs=[cleaned_audio, output_html],
         )
 
     with gr.Tab("إعدادات المصحف - Moshaf Settings"):
@@ -414,7 +483,7 @@ with gr.Blocks(title="المعلم القرآني") as app:
 
 
 def main(app=app):
-    app.launch(server_name="0.0.0.0", share=True)
+    app.launch(server_name="127.0.0.1", share=False)
 
 
 if __name__ == "__main__":

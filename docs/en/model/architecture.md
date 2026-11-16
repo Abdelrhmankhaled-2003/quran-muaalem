@@ -34,6 +34,8 @@ Audio (16 kHz)
 - `istitala`
 - `ghonna`
 
+`ismat` and `idhlaq` are derived deterministically from the recognized phoneme rather than predicted by additional CTC heads.
+
 Each head is trained with its own CTC loss. Loss weights are configurable via:
 
 - `level_to_vocab_size`
