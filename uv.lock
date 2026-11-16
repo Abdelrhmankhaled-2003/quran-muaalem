@@ -2610,7 +2610,7 @@ wheels = [
 
 [[package]]
 name = "quran-muaalem"
-version = "0.2.2"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "diff-match-patch" },
@@ -2631,6 +2631,7 @@ engine = [
     { name = "uvicorn" },
 ]
 test = [
+    { name = "httpx" },
     { name = "librosa" },
     { name = "noisereduce" },
     { name = "numba" },
@@ -2650,6 +2651,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'engine'", specifier = ">=0.116.1" },
     { name = "gradio", marker = "extra == 'ui'", specifier = ">=5.43.1" },
     { name = "httpx", marker = "extra == 'engine'", specifier = ">=0.28.1" },
+    { name = "httpx", marker = "extra == 'test'", specifier = ">=0.28.1" },
     { name = "librosa", marker = "extra == 'test'", specifier = ">=0.11.0" },
     { name = "librosa", marker = "extra == 'ui'", specifier = ">=0.11.0" },
     { name = "litserve", marker = "extra == 'engine'", specifier = ">=0.2.17" },
